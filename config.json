@@ -1,0 +1,18 @@
+{
+  "origin": "SGN",
+  "destination": "ICN",
+  "departure_date": "2026-05-16",
+  "return_date": "2026-05-23",
+  "travelers": 2,
+  "cabin": "economy",
+  "flight_alert_threshold_usd": 350,
+  "hotel_alert_per_night_usd": 150,
+  "hotel_min_stars": 3,
+  "hotel_location": "Seoul",
+  "send_daily_summary": true,
+  "alert_on_price_drop_percent": 10,
+  "deadline_urgency_days": 14,
+  "price_rise_streak_days": 3,
+  "currency": "USD",
+  "usd_to_vnd": 26300
+}
