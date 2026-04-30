@@ -7,6 +7,9 @@ on:
   workflow_dispatch:
     # Adds a manual "Run workflow" button in the GitHub Actions UI
 
+permissions:
+  contents: write
+
 jobs:
   check-prices:
     runs-on: ubuntu-latest
