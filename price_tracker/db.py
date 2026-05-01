@@ -15,18 +15,34 @@ def init_db():
     with _connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS prices (
-                date        TEXT PRIMARY KEY,
-                flight_usd  REAL,
-                airline     TEXT,
-                stops       INTEGER,
+                date         TEXT PRIMARY KEY,
+                flight_usd   REAL,
+                airline      TEXT,
+                stops        INTEGER,
                 duration_min INTEGER,
-                flight_url  TEXT,
-                hotel_usd   REAL,
-                hotel_name  TEXT,
-                hotel_stars REAL,
-                hotel_url   TEXT
+                flight_url   TEXT,
+                depart_time  TEXT,
+                arrive_time  TEXT,
+                flight_number TEXT,
+                airplane     TEXT,
+                layover_info TEXT,
+                hotel_usd    REAL,
+                hotel_name   TEXT,
+                hotel_stars  REAL,
+                hotel_url    TEXT
             )
         """)
+        # Migrate existing DB: add new columns if they don't exist yet
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(prices)")}
+        for col, typedef in [
+            ("depart_time", "TEXT"),
+            ("arrive_time", "TEXT"),
+            ("flight_number", "TEXT"),
+            ("airplane", "TEXT"),
+            ("layover_info", "TEXT"),
+        ]:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE prices ADD COLUMN {col} {typedef}")
 
 
 def save_price(record: dict):
