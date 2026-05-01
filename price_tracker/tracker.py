@@ -66,7 +66,6 @@ def fetch_hotel_price(config: dict) -> dict | None:
         "check_out_date": config["return_date"],
         "adults": config["travelers"],
         "currency": config["currency"],
-        "rating": str(config.get("hotel_min_stars", 3)),
         "hl": "en",
         "api_key": os.environ["SERPAPI_KEY"],
     }
@@ -97,7 +96,13 @@ def fetch_hotel_price(config: dict) -> dict | None:
                 return 9_999_999
         return float(raw)
 
-    cheapest = min(properties, key=get_price)
+    # Filter by minimum star rating in code (SerpAPI doesn't support rating filter)
+    min_stars = config.get("hotel_min_stars", 3)
+    filtered = [h for h in properties if h.get("overall_rating", 0) >= min_stars]
+    if not filtered:
+        filtered = properties  # fall back to all results if none match
+
+    cheapest = min(filtered, key=get_price)
     price = get_price(cheapest)
     if price >= 9_999_999:
         return None
