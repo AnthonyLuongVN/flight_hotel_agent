@@ -1,0 +1,41 @@
+name: Telegram Config Bot
+
+on:
+  schedule:
+    # Restart every 6 hours. Bot exits after 5h45m, leaving a ~15min gap.
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Allow manual start from GitHub Actions UI
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # Safety ceiling (5h50m)
+
+    permissions:
+      contents: write  # Needed to commit config.json changes back to repo
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r price_tracker/requirements.txt
+
+      - name: Configure git for committing config changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+
+      - name: Run bot
+        env:
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MAX_RUNTIME_SECONDS: '20700'  # 5h45m — exit before 6h Actions limit
+        run: |
+          cd price_tracker
+          python bot.py
