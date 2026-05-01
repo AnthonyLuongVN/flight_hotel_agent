@@ -43,3 +43,4 @@ jobs:
             git commit -m "chore: price history $(date -u +%Y-%m-%d)" &&
             git push
           )
+
