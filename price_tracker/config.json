@@ -1,8 +1,8 @@
 {
   "origin": "SGN",
   "destination": "ICN",
-  "departure_date": "2026-05-21",
-  "return_date": "2026-05-24",
+  "departure_date": "2026-05-28",
+  "return_date": "2026-05-31",
   "travelers": 2,
   "cabin": "economy",
   "flight_alert_threshold_usd": 350,
