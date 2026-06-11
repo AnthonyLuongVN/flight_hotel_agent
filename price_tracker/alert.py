@@ -97,7 +97,7 @@ def build_hotel_section(hotels: list[dict], config: dict) -> str:
     rate = config["usd_to_vnd"]
     nights = _nights(config["departure_date"], config["return_date"])
 
-    lines = [f"🏨 <b>HOTELS</b> (Seoul, {nights} nights, {config.get('hotel_min_stars',3)}+ stars)"]
+    lines = [f"🏨 <b>HOTELS</b> ({config.get('hotel_location', 'hotel')}, {nights} nights, {config.get('hotel_min_stars',3)}+ stars)"]
 
     # Narrow table: Hotel(20) Rating(4) Price — ~33 chars total, fits Telegram mobile
     # VND shown as note below; ASCII * replaces emoji; plain "Rt" not star emoji in header
@@ -137,6 +137,38 @@ def build_trigger_banner(triggers: list[str]) -> str:
     return "🚨 <b>ALERTS TRIGGERED</b>\n" + "\n".join(f"• {html.escape(t)}" for t in triggers)
 
 
+def build_route_section(
+    flights: list[dict],
+    hotels: list[dict],
+    history: list[dict],
+    triggers: list[str],
+    config: dict,
+    route_id: str,
+) -> str:
+    """Build the message block for one route (no outer header, no send)."""
+    dep_fmt = _fmt_date(config["departure_date"])
+    ret_fmt = _fmt_date(config["return_date"])
+    nights = _nights(config["departure_date"], config["return_date"])
+
+    sections = [
+        f'<b>══ {config["origin"]} → {config["destination"]} ══</b>',
+        f'📅 {dep_fmt} – {ret_fmt} ({nights} nights)',
+        "",
+        build_flight_section(flights, config),
+        "",
+        build_hotel_section(hotels, config),
+    ]
+
+    table = build_history_table(history)
+    if table:
+        sections += ["", table]
+
+    if triggers:
+        sections += ["", build_trigger_banner(triggers)]
+
+    return "\n".join(sections)
+
+
 def build_message(
     flights: list[dict],
     hotels: list[dict],
@@ -144,15 +176,27 @@ def build_message(
     triggers: list[str],
     config: dict,
     check_date: str,
+    route_sections: list[str] | None = None,
 ) -> str:
+    """Build full Telegram message.
+
+    If route_sections is provided (multi-route mode), combine them under a shared header.
+    Otherwise fall back to single-route layout for backward compat.
+    """
+    if route_sections is not None:
+        header = f'✈️ <b>Price Tracker</b> — {check_date}'
+        return header + "\n\n" + "\n\n".join(route_sections)
+
+    # Single-route legacy path
     dep_fmt = _fmt_date(config["departure_date"])
     ret_fmt = _fmt_date(config["return_date"])
     nights = _nights(config["departure_date"], config["return_date"])
+    route_label = f'{config["origin"]} → {config["destination"]}'
 
     sections = [
-        f'✈️ <b>Korea Trip Tracker</b> — {check_date}',
+        f'✈️ <b>Price Tracker — {route_label}</b> — {check_date}',
         "",
-        f'📅 <b>{config["origin"]} → {config["destination"]} | {dep_fmt} – {ret_fmt}</b> ({nights} nights)',
+        f'📅 <b>{dep_fmt} – {ret_fmt}</b> ({nights} nights)',
         "",
         build_flight_section(flights, config),
         "",

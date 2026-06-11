@@ -13,10 +13,42 @@ import alert
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
+_ROUTE_KEYS = ["origin", "destination", "departure_date", "return_date",
+               "hotel_location", "hotel_min_stars", "flight_alert_threshold_usd",
+               "hotel_alert_per_night_usd"]
+
 
 def load_config() -> dict:
     with open(CONFIG_PATH) as f:
-        return json.load(f)
+        cfg = json.load(f)
+    return _maybe_migrate_config(cfg)
+
+
+def _maybe_migrate_config(cfg: dict) -> dict:
+    """Convert old flat config format to multi-route format in-place."""
+    if "routes" in cfg:
+        return cfg
+    route_id = f"{cfg['origin']}-{cfg['destination']}"
+    cfg["routes"] = {
+        route_id: {k: cfg.pop(k) for k in _ROUTE_KEYS if k in cfg}
+    }
+    cfg["active_route"] = route_id
+    _save_config(cfg)
+    return cfg
+
+
+def _save_config(cfg: dict):
+    tmp = CONFIG_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp, CONFIG_PATH)
+
+
+def _get_merged_cfg(cfg: dict, route_id: str) -> dict:
+    """Merge global settings with route-specific settings into a flat dict."""
+    merged = {k: v for k, v in cfg.items() if k not in ("routes", "active_route")}
+    merged.update(cfg["routes"][route_id])
+    return merged
 
 
 def _parse_flight(f: dict, travelers: int) -> dict:
@@ -137,6 +169,7 @@ def evaluate_triggers(
     prev: dict | None,
     history: list[dict],
     config: dict,
+    route_id: str,
 ) -> list[str]:
     triggers = []
 
@@ -170,10 +203,10 @@ def evaluate_triggers(
             )
 
     # --- Trigger 3: New all-time low ---
-    atl_flight = db.get_all_time_low_flight()
+    atl_flight = db.get_all_time_low_flight(route_id)
     if flight and atl_flight and flight["flight_usd"] < atl_flight:
         triggers.append(f"New all-time low flight: ${flight['flight_usd']:.0f}/person!")
-    atl_hotel = db.get_all_time_low_hotel()
+    atl_hotel = db.get_all_time_low_hotel(route_id)
     if hotel and atl_hotel and hotel["hotel_usd"] < atl_hotel:
         triggers.append(f"New all-time low hotel: ${hotel['hotel_usd']:.0f}/night!")
 
@@ -202,15 +235,13 @@ def evaluate_triggers(
     return triggers
 
 
-def main():
-    config = load_config()
-    today = str(date.today())
-
-    print(f"[{today}] Fetching flights...")
+def run_route(route_id: str, config: dict, today: str) -> tuple[str, bool]:
+    """Fetch prices for one route, save to DB, return (message_section, has_triggers)."""
+    print(f"[{today}] [{route_id}] Fetching flights...")
     flights = fetch_flights(config, top_n=3)
     print(f"  Got {len(flights)} flights")
 
-    print(f"[{today}] Fetching hotels...")
+    print(f"[{today}] [{route_id}] Fetching hotels...")
     hotels = fetch_hotels(config, top_n=3)
     print(f"  Got {len(hotels)} hotels")
 
@@ -218,13 +249,11 @@ def main():
     cheapest_hotel = hotels[0] if hotels else None
 
     # Fetch history before saving (all-time-low check needs prior records)
-    prev = db.get_last_price()
-    history = db.get_history(days=7)
+    prev = db.get_last_price(route_id)
+    history = db.get_history(route_id, days=7)
 
-    # Evaluate triggers on cheapest options
-    triggers = evaluate_triggers(cheapest_flight, cheapest_hotel, prev, history, config)
+    triggers = evaluate_triggers(cheapest_flight, cheapest_hotel, prev, history, config, route_id)
 
-    # Save only the cheapest per day for history tracking
     record = {
         "date": today,
         "flight_usd": cheapest_flight["flight_usd"] if cheapest_flight else None,
@@ -242,20 +271,40 @@ def main():
         "hotel_stars": cheapest_hotel["hotel_stars"] if cheapest_hotel else None,
         "hotel_url": cheapest_hotel["hotel_url"] if cheapest_hotel else None,
     }
-    db.save_price(record)
+    db.save_price(record, route_id)
 
-    history = db.get_history(days=7)
+    history = db.get_history(route_id, days=7)
 
-    should_send = bool(triggers) or config.get("send_daily_summary", True)
+    section = alert.build_route_section(
+        flights=flights,
+        hotels=hotels,
+        history=history,
+        triggers=triggers,
+        config=config,
+        route_id=route_id,
+    )
+    return section, bool(triggers)
+
+
+def main():
+    cfg = load_config()
+    today = str(date.today())
+    route_sections = []
+    any_triggers = False
+
+    for route_id in cfg["routes"]:
+        merged = _get_merged_cfg(cfg, route_id)
+        section, has_triggers = run_route(route_id, merged, today)
+        route_sections.append(section)
+        any_triggers = any_triggers or has_triggers
+
+    should_send = any_triggers or cfg.get("send_daily_summary", True)
 
     if should_send:
         message = alert.build_message(
-            flights=flights,
-            hotels=hotels,
-            history=history,
-            triggers=triggers,
-            config=config,
+            flights=[], hotels=[], history=[], triggers=[], config={},
             check_date=today,
+            route_sections=route_sections,
         )
         print("\n--- Telegram message preview ---")
         print(message)

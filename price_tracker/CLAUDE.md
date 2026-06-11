@@ -23,18 +23,38 @@ Copy `.env.example` to `.env` and fill in `SERPAPI_KEY`, `TELEGRAM_BOT_TOKEN`, `
 ```python
 # Quick smoke test — no API calls, no Telegram message sent
 python3 -c "
-import json, os, db, alert
+import json, os, alert
 os.environ.update({'SERPAPI_KEY':'x','TELEGRAM_BOT_TOKEN':'x','TELEGRAM_CHAT_ID':'x'})
 config = json.load(open('config.json'))
-db.init_db()
-msg = alert.build_message(
-    flight={'flight_usd':310,'airline':'VietJet','stops':1,'duration_min':330,'flight_url':''},
-    hotel={'hotel_usd':95,'hotel_name':'Test Hotel','hotel_stars':4.0,'hotel_url':''},
-    prev=None, history=[], triggers=['Test trigger'], config=config, check_date='2026-01-01'
-)
+flights = [
+    {'flight_usd':343,'airline':'Vietjet','flight_number':'VJ862','stops':0,'duration_min':305,'depart_time':'02:35','arrive_time':'09:40','airplane':'A321','layover_info':'','flight_url':''},
+    {'flight_usd':380,'airline':'Korean Air','flight_number':'KE123','stops':0,'duration_min':330,'depart_time':'08:00','arrive_time':'16:30','airplane':'B777','layover_info':'','flight_url':''},
+]
+hotels = [
+    {'hotel_usd':95,'hotel_name':'Test Hotel','hotel_stars':4.2,'hotel_url':''},
+]
+msg = alert.build_message(flights=flights, hotels=hotels, history=[], triggers=['Test trigger'], config=config, check_date='2026-01-01')
 print(msg)
 "
 ```
+
+## Running the config bot
+
+```bash
+# In a separate terminal (keep running while you want to send commands)
+source .venv/bin/activate
+python bot.py
+```
+
+Then send commands from your Telegram chat:
+- `/help` — see all commands
+- `/config` — view current settings
+- `/setroute SGN ICN` — change flight route
+- `/setdates 2026-05-16 2026-05-23` — change travel dates
+- `/setflightthreshold 350` — change alert threshold
+- `/run` — trigger a manual price check immediately
+
+The bot only responds to the chat ID in `TELEGRAM_CHAT_ID` (your authorized chat). All other messages are ignored. Config changes are saved to `config.json` atomically.
 
 ## Architecture
 
@@ -43,7 +63,7 @@ All user-facing settings live in `config.json` — change thresholds, dates, or 
 **Data flow:**
 1. `tracker.py` — entry point. Calls SerpAPI twice (Google Flights + Google Hotels), runs the 5-trigger alert evaluation, saves to SQLite, sends Telegram if needed.
 2. `db.py` — thin SQLite wrapper. One row per date in the `prices` table (PRIMARY KEY on `date`, so re-running the same day overwrites). `get_all_time_low_*()` must be called **before** `save_price()` in the same run so the all-time-low trigger compares against prior history, not today's value.
-3. `alert.py` — pure message building + Telegram HTTP call. `build_message()` composes sections from `build_flight_section()`, `build_hotel_section()`, `build_history_table()`, and `build_trigger_banner()`. Messages use Telegram Markdown (single `*bold*`, backtick code blocks). VND conversion uses a fixed rate from `config["usd_to_vnd"]`.
+3. `alert.py` — pure message building + Telegram HTTP call. `build_message(flights, hotels, history, triggers, config, check_date)` composes sections. Uses HTML parse mode (`<b>`, `<code>`, `<a href>`). Trigger text must be passed through `html.escape()` to avoid Telegram 400 errors (`<`, `>`, `&` in trigger strings). Tables use narrow ASCII-only `<code>` blocks (max ~34 chars/line) — emoji are double-width in monospace and break alignment. VND shown as a text note below each table, not as a table column.
 
 **5 alert triggers** (evaluated in `evaluate_triggers()` in `tracker.py`):
 1. Price ≤ configured threshold
@@ -57,7 +77,7 @@ All user-facing settings live in `config.json` — change thresholds, dates, or 
 ## SerpAPI response shape
 
 - Flights: `data["best_flights"] + data["other_flights"]` — each item has `price` (total for all travelers), `flights` (list of legs), `total_duration`.
-- Hotels: `data["properties"]` — each item has `rate_per_night.lowest` which may be a string (`"$95"`) or float; `get_price()` in `tracker.py` handles both.
+- Hotels: `data["properties"]` — each item has `rate_per_night.lowest` which may be a string (`"$95"`) or float; `_parse_hotel()` in `tracker.py` handles both. Do NOT pass a `rating` filter param to SerpAPI (returns 400); filter by `overall_rating` in Python after fetching.
 
 ## Key constraints
 

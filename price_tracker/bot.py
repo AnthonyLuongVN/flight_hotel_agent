@@ -10,21 +10,25 @@ GitHub Actions:
     to the repo automatically.
 
 Commands:
-    /help                           - Show all commands
-    /config                         - Show current config
-    /setroute SGN ICN               - Set origin and destination airport codes
-    /setdates 2026-05-16 2026-05-23 - Set departure and return dates
-    /settravelers 2                 - Set number of travelers
-    /setcabin economy               - Set cabin class
-    /setflightthreshold 350         - Set flight alert threshold (USD/person)
-    /sethotelthreshold 150          - Set hotel alert threshold (USD/night)
-    /sethotel Seoul 3               - Set hotel location and minimum star rating
-    /setdrop 10                     - Set price drop alert percentage
-    /seturgency 14                  - Set deadline urgency days
-    /setstreak 3                    - Set price rise streak days
-    /setexchange 26300              - Set USD to VND exchange rate
-    /togglesummary                  - Toggle daily summary on/off
-    /run                            - Run the price tracker immediately
+    /help                                     - Show all commands
+    /config                                   - Show current config (active route)
+    /listroutes                               - List all tracked routes
+    /addroute SGN NRT 2026-06-10 2026-06-17 [Tokyo] - Add a new route (max 2)
+    /delroute SGN-NRT                         - Delete a route and its history
+    /setactive SGN-ICN                        - Switch the active route
+    /setroute SGN ICN                         - Set origin and destination of active route
+    /setdates 2026-05-16 2026-05-23           - Set departure and return dates of active route
+    /settravelers 2                           - Set number of travelers (global)
+    /setcabin economy                         - Set cabin class (global)
+    /setflightthreshold 350                   - Set flight alert threshold for active route
+    /sethotelthreshold 150                    - Set hotel alert threshold for active route
+    /sethotel Seoul 3                         - Set hotel location and min stars for active route
+    /setdrop 10                               - Set price drop alert percentage (global)
+    /seturgency 14                            - Set deadline urgency days (global)
+    /setstreak 3                              - Set price rise streak days (global)
+    /setexchange 26300                        - Set USD to VND exchange rate (global)
+    /togglesummary                            - Toggle daily summary on/off (global)
+    /run                                      - Run the price tracker immediately
 """
 
 import json
@@ -47,16 +51,35 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}"
 
-# Exit cleanly before GitHub Actions 6-hour job limit (default: run forever)
 MAX_RUNTIME_SECONDS = int(os.environ.get("MAX_RUNTIME_SECONDS", 0))
 _START_TIME = time.monotonic()
+
+_ROUTE_KEYS = ["origin", "destination", "departure_date", "return_date",
+               "hotel_location", "hotel_min_stars", "flight_alert_threshold_usd",
+               "hotel_alert_per_night_usd"]
+
+MAX_ROUTES = 2
 
 
 # ── Config I/O ─────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
     with open(CONFIG_PATH) as f:
-        return json.load(f)
+        cfg = json.load(f)
+    return _maybe_migrate_config(cfg)
+
+
+def _maybe_migrate_config(cfg: dict) -> dict:
+    """Convert old flat config to multi-route format."""
+    if "routes" in cfg:
+        return cfg
+    route_id = f"{cfg['origin']}-{cfg['destination']}"
+    cfg["routes"] = {
+        route_id: {k: cfg.pop(k) for k in _ROUTE_KEYS if k in cfg}
+    }
+    cfg["active_route"] = route_id
+    save_config(cfg)
+    return cfg
 
 
 def save_config(cfg: dict):
@@ -76,18 +99,29 @@ def _git_commit_config(reason: str):
         cwd=SCRIPT_DIR, capture_output=True, text=True,
     )
     if result.returncode != 0:
-        return  # Nothing to commit (no change)
+        return
     push = subprocess.run(["git", "push"], cwd=SCRIPT_DIR, capture_output=True, text=True)
     if push.returncode != 0:
-        # Remote may have new commits (e.g. prices.db update) — rebase then retry
         subprocess.run(["git", "pull", "--rebase"], cwd=SCRIPT_DIR, check=False)
         subprocess.run(["git", "push"], cwd=SCRIPT_DIR, check=False)
 
 
 def apply_config(cfg: dict, reason: str):
-    """Save config and commit to repo if running on GitHub Actions."""
     save_config(cfg)
     _git_commit_config(reason)
+
+
+def _active_route(cfg: dict) -> dict:
+    """Return the active route's settings dict (mutable reference)."""
+    return cfg["routes"][cfg["active_route"]]
+
+
+def _get_merged_cfg(cfg: dict, route_id: str | None = None) -> dict:
+    """Merge global + route-specific settings into a flat dict."""
+    rid = route_id or cfg["active_route"]
+    merged = {k: v for k, v in cfg.items() if k not in ("routes", "active_route")}
+    merged.update(cfg["routes"][rid])
+    return merged
 
 
 # ── Telegram helpers ────────────────────────────────────────────────────────
@@ -155,23 +189,25 @@ def _validate_positive_int(s: str, name: str) -> int:
 def cmd_help() -> str:
     return (
         "<b>Price Tracker Bot Commands</b>\n\n"
-        "<b>View</b>\n"
-        "/config — show all current settings\n\n"
-        "<b>Flight settings</b>\n"
+        "<b>Routes (max 2)</b>\n"
+        "/listroutes — list all tracked routes\n"
+        "/addroute SGN NRT 2026-06-10 2026-06-17 Tokyo — add route\n"
+        "/delroute SGN-NRT — delete route &amp; its history\n"
+        "/setactive SGN-ICN — switch active route\n\n"
+        "<b>Active route settings</b>\n"
+        "/config — show active route settings\n"
         "/setroute SGN ICN — origin &amp; destination\n"
         "/setdates 2026-05-16 2026-05-23 — travel dates\n"
-        "/settravelers 2 — number of travelers\n"
-        "/setcabin economy — cabin class\n"
-        "/setflightthreshold 350 — alert when flight ≤ $X/person\n\n"
-        "<b>Hotel settings</b>\n"
+        "/setflightthreshold 350 — alert when flight ≤ $X/person\n"
         "/sethotel Seoul 3 — location &amp; min star rating\n"
         "/sethotelthreshold 150 — alert when hotel ≤ $X/night\n\n"
-        "<b>Alert behavior</b>\n"
+        "<b>Global settings</b>\n"
+        "/settravelers 2 — number of travelers\n"
+        "/setcabin economy — cabin class\n"
         "/setdrop 10 — alert on price drop ≥ X%\n"
         "/seturgency 14 — alert daily when departure ≤ X days away\n"
         "/setstreak 3 — alert when price rises X days in a row\n"
-        "/togglesummary — toggle daily summary on/off\n\n"
-        "<b>Currency</b>\n"
+        "/togglesummary — toggle daily summary on/off\n"
         "/setexchange 26300 — USD → VND exchange rate\n\n"
         "<b>Actions</b>\n"
         "/run — fetch prices and send alert now\n"
@@ -181,29 +217,137 @@ def cmd_help() -> str:
 
 def cmd_config() -> str:
     cfg = load_config()
-    nights = (_parse_date(cfg["return_date"]) - _parse_date(cfg["departure_date"])).days
+    active_id = cfg["active_route"]
+    route = cfg["routes"][active_id]
+
+    dep = route["departure_date"]
+    ret = route["return_date"]
+    nights = (_parse_date(ret) - _parse_date(dep)).days
     summary_status = "ON" if cfg.get("send_daily_summary", True) else "OFF"
-    return (
-        f"<b>Current Config</b>\n\n"
-        f"<b>Flight</b>\n"
-        f"  Route: {cfg['origin']} → {cfg['destination']}\n"
-        f"  Depart: {cfg['departure_date']}\n"
-        f"  Return: {cfg['return_date']} ({nights} nights)\n"
-        f"  Travelers: {cfg['travelers']}\n"
-        f"  Cabin: {cfg['cabin']}\n"
-        f"  Alert threshold: ${cfg['flight_alert_threshold_usd']}/person\n\n"
-        f"<b>Hotel</b>\n"
-        f"  Location: {cfg['hotel_location']}\n"
-        f"  Min stars: {cfg['hotel_min_stars']}\n"
-        f"  Alert threshold: ${cfg['hotel_alert_per_night_usd']}/night\n\n"
-        f"<b>Alerts</b>\n"
-        f"  Price drop alert: ≥{cfg.get('alert_on_price_drop_percent', 10)}%\n"
-        f"  Urgency window: {cfg.get('deadline_urgency_days', 14)} days before departure\n"
-        f"  Rising streak: {cfg.get('price_rise_streak_days', 3)} days\n"
-        f"  Daily summary: {summary_status}\n\n"
-        f"<b>Currency</b>\n"
-        f"  1 USD = {cfg['usd_to_vnd']:,} VND"
-    )
+
+    lines = [
+        f"<b>Active Route: {active_id}</b>\n",
+        f"<b>Flight</b>",
+        f"  Route: {route['origin']} → {route['destination']}",
+        f"  Depart: {dep}",
+        f"  Return: {ret} ({nights} nights)",
+        f"  Travelers: {cfg['travelers']}",
+        f"  Cabin: {cfg['cabin']}",
+        f"  Alert threshold: ${route['flight_alert_threshold_usd']}/person",
+        f"",
+        f"<b>Hotel</b>",
+        f"  Location: {route.get('hotel_location', '—')}",
+        f"  Min stars: {route.get('hotel_min_stars', 3)}",
+        f"  Alert threshold: ${route['hotel_alert_per_night_usd']}/night",
+        f"",
+        f"<b>Alerts (global)</b>",
+        f"  Price drop alert: ≥{cfg.get('alert_on_price_drop_percent', 10)}%",
+        f"  Urgency window: {cfg.get('deadline_urgency_days', 14)} days before departure",
+        f"  Rising streak: {cfg.get('price_rise_streak_days', 3)} days",
+        f"  Daily summary: {summary_status}",
+        f"",
+        f"<b>Currency</b>",
+        f"  1 USD = {cfg['usd_to_vnd']:,} VND",
+    ]
+
+    other_routes = [rid for rid in cfg["routes"] if rid != active_id]
+    if other_routes:
+        lines += ["", "<b>Other routes</b>"]
+        for rid in other_routes:
+            r = cfg["routes"][rid]
+            lines.append(f"  {rid}: {r['origin']}→{r['destination']}, {r['departure_date']} – {r['return_date']}")
+        lines.append("Use /setactive to switch.")
+
+    return "\n".join(lines)
+
+
+def cmd_listroutes() -> str:
+    cfg = load_config()
+    if not cfg["routes"]:
+        return "No routes configured."
+    active_id = cfg["active_route"]
+    lines = ["<b>Tracked Routes</b>\n"]
+    for rid, r in cfg["routes"].items():
+        marker = "★ " if rid == active_id else "  "
+        lines.append(
+            f"{marker}<b>{rid}</b>: {r['origin']}→{r['destination']}\n"
+            f"     {r['departure_date']} – {r['return_date']}\n"
+            f"     Hotel: {r.get('hotel_location', '—')} | ✈ ≤${r['flight_alert_threshold_usd']} | 🏨 ≤${r['hotel_alert_per_night_usd']}/night"
+        )
+    lines.append(f"\n★ = active route  ({len(cfg['routes'])}/{MAX_ROUTES} slots used)")
+    return "\n".join(lines)
+
+
+def cmd_addroute(args: list[str]) -> str:
+    if len(args) < 4:
+        return "Usage: /addroute ORIGIN DEST DEPARTURE RETURN [HOTEL_LOCATION]\nExample: /addroute SGN NRT 2026-06-10 2026-06-17 Tokyo"
+    origin = _validate_airport(args[0])
+    dest = _validate_airport(args[1])
+    dep = _parse_date(args[2])
+    ret = _parse_date(args[3])
+    if ret <= dep:
+        return "❌ Return date must be after departure date"
+    hotel_location = " ".join(args[4:]) if len(args) > 4 else ""
+
+    cfg = load_config()
+    if len(cfg["routes"]) >= MAX_ROUTES:
+        existing = ", ".join(cfg["routes"].keys())
+        return f"❌ Max {MAX_ROUTES} routes allowed. Current routes: {existing}\nUse /delroute to remove one first."
+
+    route_id = f"{origin}-{dest}"
+    if route_id in cfg["routes"]:
+        return f"❌ Route {route_id} already exists. Use /delroute {route_id} to remove it first."
+
+    cfg["routes"][route_id] = {
+        "origin": origin,
+        "destination": dest,
+        "departure_date": str(dep),
+        "return_date": str(ret),
+        "hotel_location": hotel_location,
+        "hotel_min_stars": 3,
+        "flight_alert_threshold_usd": cfg["routes"][cfg["active_route"]]["flight_alert_threshold_usd"],
+        "hotel_alert_per_night_usd": cfg["routes"][cfg["active_route"]]["hotel_alert_per_night_usd"],
+    }
+    cfg["active_route"] = route_id
+    apply_config(cfg, f"add route {route_id}")
+    hotel_msg = f", hotel: {hotel_location}" if hotel_location else " (set hotel with /sethotel)"
+    return f"✅ Route {route_id} added and set as active{hotel_msg}"
+
+
+def cmd_delroute(args: list[str]) -> str:
+    if len(args) != 1:
+        return "Usage: /delroute ROUTE_ID\nExample: /delroute SGN-NRT"
+    route_id = args[0].upper()
+    cfg = load_config()
+    if route_id not in cfg["routes"]:
+        existing = ", ".join(cfg["routes"].keys())
+        return f"❌ Route {route_id} not found. Routes: {existing}"
+    if len(cfg["routes"]) == 1:
+        return "❌ Can't delete the only route."
+
+    del cfg["routes"][route_id]
+    if cfg["active_route"] == route_id:
+        cfg["active_route"] = next(iter(cfg["routes"]))
+
+    # Delete price history from DB
+    import db as _db
+    _db.delete_route_history(route_id)
+
+    apply_config(cfg, f"delete route {route_id}")
+    return f"✅ Route {route_id} deleted (history cleared). Active route: {cfg['active_route']}"
+
+
+def cmd_setactive(args: list[str]) -> str:
+    if len(args) != 1:
+        return "Usage: /setactive ROUTE_ID\nExample: /setactive SGN-ICN"
+    route_id = args[0].upper()
+    cfg = load_config()
+    if route_id not in cfg["routes"]:
+        existing = ", ".join(cfg["routes"].keys())
+        return f"❌ Route {route_id} not found. Routes: {existing}"
+    cfg["active_route"] = route_id
+    apply_config(cfg, f"set active route {route_id}")
+    return f"✅ Active route set to {route_id}"
 
 
 def cmd_setroute(args: list[str]) -> str:
@@ -212,10 +356,11 @@ def cmd_setroute(args: list[str]) -> str:
     origin = _validate_airport(args[0])
     dest = _validate_airport(args[1])
     cfg = load_config()
-    cfg["origin"] = origin
-    cfg["destination"] = dest
-    apply_config(cfg, f"set route {origin}-{dest}")
-    return f"✅ Route updated: {origin} → {dest}"
+    route = _active_route(cfg)
+    route["origin"] = origin
+    route["destination"] = dest
+    apply_config(cfg, f"set route {origin}-{dest} on {cfg['active_route']}")
+    return f"✅ Route [{cfg['active_route']}] updated: {origin} → {dest}"
 
 
 def cmd_setdates(args: list[str]) -> str:
@@ -226,11 +371,12 @@ def cmd_setdates(args: list[str]) -> str:
     if ret <= dep:
         return "❌ Return date must be after departure date"
     cfg = load_config()
-    cfg["departure_date"] = str(dep)
-    cfg["return_date"] = str(ret)
+    route = _active_route(cfg)
+    route["departure_date"] = str(dep)
+    route["return_date"] = str(ret)
     nights = (ret - dep).days
-    apply_config(cfg, f"set dates {dep}/{ret}")
-    return f"✅ Dates updated: {dep} → {ret} ({nights} nights)"
+    apply_config(cfg, f"set dates {dep}/{ret} on {cfg['active_route']}")
+    return f"✅ [{cfg['active_route']}] Dates updated: {dep} → {ret} ({nights} nights)"
 
 
 def cmd_settravelers(args: list[str]) -> str:
@@ -240,7 +386,7 @@ def cmd_settravelers(args: list[str]) -> str:
     cfg = load_config()
     cfg["travelers"] = n
     apply_config(cfg, f"set travelers {n}")
-    return f"✅ Travelers set to {n}"
+    return f"✅ Travelers set to {n} (all routes)"
 
 
 def cmd_setcabin(args: list[str]) -> str:
@@ -253,7 +399,7 @@ def cmd_setcabin(args: list[str]) -> str:
     cfg = load_config()
     cfg["cabin"] = cabin
     apply_config(cfg, f"set cabin {cabin}")
-    return f"✅ Cabin set to {cabin}"
+    return f"✅ Cabin set to {cabin} (all routes)"
 
 
 def cmd_setflightthreshold(args: list[str]) -> str:
@@ -261,9 +407,9 @@ def cmd_setflightthreshold(args: list[str]) -> str:
         return "Usage: /setflightthreshold USD\nExample: /setflightthreshold 350"
     v = _validate_positive_float(args[0], "Threshold")
     cfg = load_config()
-    cfg["flight_alert_threshold_usd"] = v
-    apply_config(cfg, f"set flight threshold ${v:.0f}")
-    return f"✅ Flight alert threshold set to ${v:.0f}/person"
+    _active_route(cfg)["flight_alert_threshold_usd"] = v
+    apply_config(cfg, f"set flight threshold ${v:.0f} on {cfg['active_route']}")
+    return f"✅ [{cfg['active_route']}] Flight alert threshold set to ${v:.0f}/person"
 
 
 def cmd_sethotelthreshold(args: list[str]) -> str:
@@ -271,9 +417,9 @@ def cmd_sethotelthreshold(args: list[str]) -> str:
         return "Usage: /sethotelthreshold USD\nExample: /sethotelthreshold 150"
     v = _validate_positive_float(args[0], "Threshold")
     cfg = load_config()
-    cfg["hotel_alert_per_night_usd"] = v
-    apply_config(cfg, f"set hotel threshold ${v:.0f}")
-    return f"✅ Hotel alert threshold set to ${v:.0f}/night"
+    _active_route(cfg)["hotel_alert_per_night_usd"] = v
+    apply_config(cfg, f"set hotel threshold ${v:.0f} on {cfg['active_route']}")
+    return f"✅ [{cfg['active_route']}] Hotel alert threshold set to ${v:.0f}/night"
 
 
 def cmd_sethotel(args: list[str]) -> str:
@@ -291,14 +437,15 @@ def cmd_sethotel(args: list[str]) -> str:
         location = args[0]
 
     cfg = load_config()
-    cfg["hotel_location"] = location
+    route = _active_route(cfg)
+    route["hotel_location"] = location
     if stars is not None:
         if stars < 0 or stars > 5:
             return "❌ Min stars must be between 0 and 5"
-        cfg["hotel_min_stars"] = stars
-    apply_config(cfg, f"set hotel {location}")
-    stars_msg = f", min {cfg['hotel_min_stars']} stars" if stars is not None else ""
-    return f"✅ Hotel location set to {location}{stars_msg}"
+        route["hotel_min_stars"] = stars
+    apply_config(cfg, f"set hotel {location} on {cfg['active_route']}")
+    stars_msg = f", min {route.get('hotel_min_stars', 3)} stars" if stars is not None else ""
+    return f"✅ [{cfg['active_route']}] Hotel location set to {location}{stars_msg}"
 
 
 def cmd_setdrop(args: list[str]) -> str:
@@ -308,7 +455,7 @@ def cmd_setdrop(args: list[str]) -> str:
     cfg = load_config()
     cfg["alert_on_price_drop_percent"] = v
     apply_config(cfg, f"set drop alert {v:.0f}%")
-    return f"✅ Price drop alert set to ≥{v:.0f}%"
+    return f"✅ Price drop alert set to ≥{v:.0f}% (all routes)"
 
 
 def cmd_seturgency(args: list[str]) -> str:
@@ -318,7 +465,7 @@ def cmd_seturgency(args: list[str]) -> str:
     cfg = load_config()
     cfg["deadline_urgency_days"] = v
     apply_config(cfg, f"set urgency {v}d")
-    return f"✅ Deadline urgency set to {v} days before departure"
+    return f"✅ Deadline urgency set to {v} days before departure (all routes)"
 
 
 def cmd_setstreak(args: list[str]) -> str:
@@ -328,7 +475,7 @@ def cmd_setstreak(args: list[str]) -> str:
     cfg = load_config()
     cfg["price_rise_streak_days"] = v
     apply_config(cfg, f"set streak {v}d")
-    return f"✅ Rising price streak alert set to {v} consecutive days"
+    return f"✅ Rising price streak alert set to {v} consecutive days (all routes)"
 
 
 def cmd_setexchange(args: list[str]) -> str:
@@ -338,7 +485,7 @@ def cmd_setexchange(args: list[str]) -> str:
     cfg = load_config()
     cfg["usd_to_vnd"] = v
     apply_config(cfg, f"set exchange rate {v}")
-    return f"✅ Exchange rate set to 1 USD = {v:,} VND"
+    return f"✅ Exchange rate set to 1 USD = {v:,} VND (all routes)"
 
 
 def cmd_togglesummary() -> str:
@@ -372,7 +519,6 @@ def handle(message: dict):
     if not text.startswith("/"):
         return
 
-    # Strip bot mention (e.g. /start@MyBot → /start)
     parts = text.split()
     cmd = parts[0].split("@")[0].lower()
     args = parts[1:]
@@ -382,6 +528,14 @@ def handle(message: dict):
             send(cmd_help())
         elif cmd == "/config":
             send(cmd_config())
+        elif cmd == "/listroutes":
+            send(cmd_listroutes())
+        elif cmd == "/addroute":
+            send(cmd_addroute(args))
+        elif cmd == "/delroute":
+            send(cmd_delroute(args))
+        elif cmd == "/setactive":
+            send(cmd_setactive(args))
         elif cmd == "/setroute":
             send(cmd_setroute(args))
         elif cmd == "/setdates":
