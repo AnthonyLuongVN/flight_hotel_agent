@@ -10,16 +10,6 @@
       "hotel_min_stars": 3,
       "flight_alert_threshold_usd": 350,
       "hotel_alert_per_night_usd": 150
-    },
-    "SGN-ICN": {
-      "origin": "SGN",
-      "destination": "ICN",
-      "departure_date": "2026-05-16",
-      "return_date": "2026-05-23",
-      "hotel_location": "Seoul",
-      "hotel_min_stars": 3,
-      "flight_alert_threshold_usd": 350,
-      "hotel_alert_per_night_usd": 150
     }
   },
   "travelers": 2,
