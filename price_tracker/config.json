@@ -4,11 +4,21 @@
     "SGN-HUI": {
       "origin": "SGN",
       "destination": "HUI",
-      "departure_date": "2026-05-28",
-      "return_date": "2026-05-31",
-      "hotel_location": "Hue",
+      "departure_date": "2026-07-01",
+      "return_date": null,
+      "hotel_location": "",
       "hotel_min_stars": 3,
-      "flight_alert_threshold_usd": 350,
+      "flight_alert_threshold_usd": 53,
+      "hotel_alert_per_night_usd": 150
+    },
+    "DAD-SGN": {
+      "origin": "DAD",
+      "destination": "SGN",
+      "departure_date": "2026-07-05",
+      "return_date": null,
+      "hotel_location": "",
+      "hotel_min_stars": 3,
+      "flight_alert_threshold_usd": 49,
       "hotel_alert_per_night_usd": 150
     }
   },
