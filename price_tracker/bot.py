@@ -191,13 +191,14 @@ def cmd_help() -> str:
         "<b>Price Tracker Bot Commands</b>\n\n"
         "<b>Routes (max 2)</b>\n"
         "/listroutes — list all tracked routes\n"
-        "/addroute SGN NRT 2026-06-10 2026-06-17 Tokyo — add route\n"
+        "/addroute SGN ICN 2026-05-28 — add one-way route\n"
+        "/addroute SGN ICN 2026-05-28 2026-06-05 Seoul — add round-trip\n"
         "/delroute SGN-NRT — delete route &amp; its history\n"
         "/setactive SGN-ICN — switch active route\n\n"
         "<b>Active route settings</b>\n"
         "/config — show active route settings\n"
         "/setroute SGN ICN — origin &amp; destination\n"
-        "/setdates 2026-05-16 2026-05-23 — travel dates\n"
+        "/setdates 2026-05-28 [2026-06-05] — departure (+ optional return)\n"
         "/setflightthreshold 350 — alert when flight ≤ $X/person\n"
         "/sethotel Seoul 3 — location &amp; min star rating\n"
         "/sethotelthreshold 150 — alert when hotel ≤ $X/night\n\n"
@@ -221,16 +222,15 @@ def cmd_config() -> str:
     route = cfg["routes"][active_id]
 
     dep = route["departure_date"]
-    ret = route["return_date"]
-    nights = (_parse_date(ret) - _parse_date(dep)).days
+    ret = route.get("return_date")
+    date_str = f"{dep} – {ret} ({(_parse_date(ret) - _parse_date(dep)).days} nights)" if ret else f"{dep} (one-way)"
     summary_status = "ON" if cfg.get("send_daily_summary", True) else "OFF"
 
     lines = [
         f"<b>Active Route: {active_id}</b>\n",
         f"<b>Flight</b>",
         f"  Route: {route['origin']} → {route['destination']}",
-        f"  Depart: {dep}",
-        f"  Return: {ret} ({nights} nights)",
+        f"  Date(s): {date_str}",
         f"  Travelers: {cfg['travelers']}",
         f"  Cabin: {cfg['cabin']}",
         f"  Alert threshold: ${route['flight_alert_threshold_usd']}/person",
@@ -255,7 +255,8 @@ def cmd_config() -> str:
         lines += ["", "<b>Other routes</b>"]
         for rid in other_routes:
             r = cfg["routes"][rid]
-            lines.append(f"  {rid}: {r['origin']}→{r['destination']}, {r['departure_date']} – {r['return_date']}")
+            ret_str = f" – {r['return_date']}" if r.get("return_date") else " (one-way)"
+            lines.append(f"  {rid}: {r['origin']}→{r['destination']}, {r['departure_date']}{ret_str}")
         lines.append("Use /setactive to switch.")
 
     return "\n".join(lines)
@@ -269,25 +270,46 @@ def cmd_listroutes() -> str:
     lines = ["<b>Tracked Routes</b>\n"]
     for rid, r in cfg["routes"].items():
         marker = "★ " if rid == active_id else "  "
+        ret_str = f" – {r['return_date']}" if r.get("return_date") else " (one-way)"
+        hotel_str = r.get("hotel_location", "—") if r.get("return_date") else "—"
         lines.append(
             f"{marker}<b>{rid}</b>: {r['origin']}→{r['destination']}\n"
-            f"     {r['departure_date']} – {r['return_date']}\n"
-            f"     Hotel: {r.get('hotel_location', '—')} | ✈ ≤${r['flight_alert_threshold_usd']} | 🏨 ≤${r['hotel_alert_per_night_usd']}/night"
+            f"     {r['departure_date']}{ret_str}\n"
+            f"     Hotel: {hotel_str} | ✈ ≤${r['flight_alert_threshold_usd']} | 🏨 ≤${r['hotel_alert_per_night_usd']}/night"
         )
     lines.append(f"\n★ = active route  ({len(cfg['routes'])}/{MAX_ROUTES} slots used)")
     return "\n".join(lines)
 
 
+def _is_date(s: str) -> bool:
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
 def cmd_addroute(args: list[str]) -> str:
-    if len(args) < 4:
-        return "Usage: /addroute ORIGIN DEST DEPARTURE RETURN [HOTEL_LOCATION]\nExample: /addroute SGN NRT 2026-06-10 2026-06-17 Tokyo"
+    if len(args) < 3:
+        return (
+            "Usage: /addroute ORIGIN DEST DEPARTURE [RETURN] [HOTEL_LOCATION]\n"
+            "One-way:    /addroute SGN ICN 2026-05-28\n"
+            "Round-trip: /addroute SGN ICN 2026-05-28 2026-06-05 Seoul"
+        )
     origin = _validate_airport(args[0])
     dest = _validate_airport(args[1])
     dep = _parse_date(args[2])
-    ret = _parse_date(args[3])
-    if ret <= dep:
-        return "❌ Return date must be after departure date"
-    hotel_location = " ".join(args[4:]) if len(args) > 4 else ""
+
+    # args[3] is return date only if it looks like YYYY-MM-DD
+    ret = None
+    hotel_location = ""
+    if len(args) > 3 and _is_date(args[3]):
+        ret = _parse_date(args[3])
+        if ret <= dep:
+            return "❌ Return date must be after departure date"
+        hotel_location = " ".join(args[4:]) if len(args) > 4 else ""
+    else:
+        hotel_location = " ".join(args[3:]) if len(args) > 3 else ""
 
     cfg = load_config()
     if len(cfg["routes"]) >= MAX_ROUTES:
@@ -302,7 +324,7 @@ def cmd_addroute(args: list[str]) -> str:
         "origin": origin,
         "destination": dest,
         "departure_date": str(dep),
-        "return_date": str(ret),
+        "return_date": str(ret) if ret else None,
         "hotel_location": hotel_location,
         "hotel_min_stars": 3,
         "flight_alert_threshold_usd": cfg["routes"][cfg["active_route"]]["flight_alert_threshold_usd"],
@@ -310,8 +332,9 @@ def cmd_addroute(args: list[str]) -> str:
     }
     cfg["active_route"] = route_id
     apply_config(cfg, f"add route {route_id}")
-    hotel_msg = f", hotel: {hotel_location}" if hotel_location else " (set hotel with /sethotel)"
-    return f"✅ Route {route_id} added and set as active{hotel_msg}"
+    trip_type = "round-trip" if ret else "one-way"
+    hotel_msg = f", hotel: {hotel_location}" if hotel_location else (" (set hotel with /sethotel)" if ret else "")
+    return f"✅ Route {route_id} added ({trip_type}), set as active{hotel_msg}"
 
 
 def cmd_delroute(args: list[str]) -> str:
@@ -364,19 +387,24 @@ def cmd_setroute(args: list[str]) -> str:
 
 
 def cmd_setdates(args: list[str]) -> str:
-    if len(args) != 2:
-        return "Usage: /setdates DEPARTURE RETURN\nExample: /setdates 2026-05-16 2026-05-23"
+    if len(args) not in (1, 2):
+        return "Usage: /setdates DEPARTURE [RETURN]\nOne-way:    /setdates 2026-05-28\nRound-trip: /setdates 2026-05-16 2026-05-23"
     dep = _parse_date(args[0])
-    ret = _parse_date(args[1])
-    if ret <= dep:
-        return "❌ Return date must be after departure date"
     cfg = load_config()
     route = _active_route(cfg)
     route["departure_date"] = str(dep)
-    route["return_date"] = str(ret)
-    nights = (ret - dep).days
-    apply_config(cfg, f"set dates {dep}/{ret} on {cfg['active_route']}")
-    return f"✅ [{cfg['active_route']}] Dates updated: {dep} → {ret} ({nights} nights)"
+    if len(args) == 2:
+        ret = _parse_date(args[1])
+        if ret <= dep:
+            return "❌ Return date must be after departure date"
+        route["return_date"] = str(ret)
+        nights = (ret - dep).days
+        apply_config(cfg, f"set dates {dep}/{ret} on {cfg['active_route']}")
+        return f"✅ [{cfg['active_route']}] Dates updated: {dep} → {ret} ({nights} nights)"
+    else:
+        route["return_date"] = None
+        apply_config(cfg, f"set date {dep} (one-way) on {cfg['active_route']}")
+        return f"✅ [{cfg['active_route']}] Departure set to {dep} (one-way)"
 
 
 def cmd_settravelers(args: list[str]) -> str:

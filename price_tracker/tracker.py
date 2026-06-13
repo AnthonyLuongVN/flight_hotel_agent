@@ -86,12 +86,13 @@ def fetch_flights(config: dict, top_n: int = 3) -> list[dict]:
         "departure_id": config["origin"],
         "arrival_id": config["destination"],
         "outbound_date": config["departure_date"],
-        "return_date": config["return_date"],
         "adults": config["travelers"],
         "currency": config["currency"],
         "hl": "en",
         "api_key": os.environ["SERPAPI_KEY"],
     }
+    if config.get("return_date"):
+        params["return_date"] = config["return_date"]
     try:
         r = requests.get("https://serpapi.com/search", params=params, timeout=30)
         r.raise_for_status()
@@ -132,6 +133,8 @@ def _parse_hotel(h: dict) -> dict | None:
 
 
 def fetch_hotels(config: dict, top_n: int = 3) -> list[dict]:
+    if not config.get("return_date"):
+        return []  # one-way route — no check-out date for hotel search
     params = {
         "engine": "google_hotels",
         "q": f"hotels in {config['hotel_location']}",

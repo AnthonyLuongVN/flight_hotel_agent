@@ -147,17 +147,19 @@ def build_route_section(
 ) -> str:
     """Build the message block for one route (no outer header, no send)."""
     dep_fmt = _fmt_date(config["departure_date"])
-    ret_fmt = _fmt_date(config["return_date"])
-    nights = _nights(config["departure_date"], config["return_date"])
+    if config.get("return_date"):
+        date_line = f'📅 {dep_fmt} – {_fmt_date(config["return_date"])} ({_nights(config["departure_date"], config["return_date"])} nights)'
+    else:
+        date_line = f'📅 {dep_fmt} (one-way)'
 
     sections = [
         f'<b>══ {config["origin"]} → {config["destination"]} ══</b>',
-        f'📅 {dep_fmt} – {ret_fmt} ({nights} nights)',
+        date_line,
         "",
         build_flight_section(flights, config),
-        "",
-        build_hotel_section(hotels, config),
     ]
+    if hotels or config.get("return_date"):
+        sections += ["", build_hotel_section(hotels, config)]
 
     table = build_history_table(history)
     if table:
