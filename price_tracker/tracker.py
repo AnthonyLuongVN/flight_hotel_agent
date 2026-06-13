@@ -93,6 +93,9 @@ def fetch_flights(config: dict, top_n: int = 3) -> list[dict]:
     }
     if config.get("return_date"):
         params["return_date"] = config["return_date"]
+        params["type"] = "1"  # round-trip
+    else:
+        params["type"] = "2"  # one-way
     try:
         r = requests.get("https://serpapi.com/search", params=params, timeout=30)
         r.raise_for_status()
