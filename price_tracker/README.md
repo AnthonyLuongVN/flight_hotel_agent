@@ -1,7 +1,8 @@
-# Korea Trip Price Tracker
+# Flight Price Tracker Bot
 
-Automated daily tracker for flight (SGN → ICN) and hotel prices in Seoul.
-Sends Telegram alerts when prices hit your budget or drop significantly.
+Automated daily tracker for flight prices on any route. Sends Telegram alerts when prices hit your budget, drop significantly, or show other patterns worth acting on.
+
+Supports up to **2 independent routes** — each with its own dates, thresholds, and price history. Routes can be one-way or round-trip.
 
 **Cost: $0/month** — uses SerpAPI free tier (250 searches/month) + Telegram Bot API (free).
 
@@ -9,11 +10,12 @@ Sends Telegram alerts when prices hit your budget or drop significantly.
 
 ## Features
 
-- Checks Google Flights + Google Hotels via SerpAPI every day at 2 PM Vietnam time
+- Checks Google Flights (and Google Hotels for round-trip routes) via SerpAPI every day
+- Monitors **up to 2 routes independently** — one-way or round-trip, any airports
 - Shows prices in **USD and VND** (configurable exchange rate)
-- 5 alert triggers: under budget, sudden drop, new all-time low, deadline urgency, rising trend
-- Price history stored in SQLite and shown as a 7-day table in Telegram
-- All settings in `config.json` — no code changes needed
+- **5 alert triggers:** under budget, sudden drop, new all-time low, deadline urgency, rising trend
+- Price history stored in SQLite, shown as a 7-day table per route in Telegram
+- Control everything via **Telegram bot commands** — no code or file edits needed
 
 ---
 
@@ -31,43 +33,91 @@ Sends Telegram alerts when prices hit your budget or drop significantly.
 
 1. Sign up at [serpapi.com](https://serpapi.com) (free, no credit card needed)
 2. Copy your API key from the dashboard
-3. Free tier: **250 searches/month** (tracker uses ~60/month)
+3. Free tier: **250 searches/month** (tracker uses ~2/day per route)
 
 ### 3. Deploy to GitHub
 
-1. Create a new **public** GitHub repository (public = unlimited free Actions minutes)
-2. Push this entire `price_tracker/` folder to the repo root
-3. Go to **Settings → Secrets and variables → Actions → New repository secret** and add:
+1. Fork or push this repo to your own GitHub account
+2. Go to **Settings → Secrets and variables → Actions → New repository secret** and add:
    - `SERPAPI_KEY` — your SerpAPI key
    - `TELEGRAM_BOT_TOKEN` — your bot token from BotFather
    - `TELEGRAM_CHAT_ID` — your chat ID from step 1
+3. Go to **Actions** tab → enable workflows if prompted
 
-4. Go to **Actions** tab → enable workflows if prompted
-
-GitHub Actions will now run automatically every day at 2 PM Vietnam time.
-You can also trigger it manually with the **"Run workflow"** button in the Actions tab.
+GitHub Actions runs the tracker automatically every day at 2 PM Vietnam time (07:00 UTC). You can also trigger it manually with the **"Run workflow"** button.
 
 ---
 
-## Configuration
+## Telegram Bot Commands
 
-Edit `config.json` to change any setting — no code changes needed:
+### Route management
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `origin` | `SGN` | Departure airport IATA code |
-| `destination` | `ICN` | Arrival airport IATA code |
-| `departure_date` | `2026-05-16` | Target departure date |
-| `return_date` | `2026-05-23` | Target return date |
-| `travelers` | `2` | Number of adults |
-| `flight_alert_threshold_usd` | `350` | Alert when flight is at or below this (per person, round trip) |
-| `hotel_alert_per_night_usd` | `150` | Alert when hotel is at or below this (per night) |
-| `hotel_min_stars` | `3` | Minimum star rating for hotels |
-| `usd_to_vnd` | `26300` | Fixed USD → VND exchange rate |
-| `send_daily_summary` | `true` | Send a Telegram message every day even if no alerts |
-| `alert_on_price_drop_percent` | `10` | Alert if price drops this % vs yesterday |
-| `deadline_urgency_days` | `14` | Start daily urgency alerts this many days before departure |
-| `price_rise_streak_days` | `3` | Alert if price rises this many consecutive days |
+| Command | Description |
+|---------|-------------|
+| `/listroutes` | Show all tracked routes |
+| `/addroute SGN ICN 2026-07-01` | Add a one-way route |
+| `/addroute SGN ICN 2026-07-01 2026-07-08 Seoul` | Add a round-trip route with hotel location |
+| `/delroute SGN-ICN` | Delete a route and its price history |
+| `/setactive SGN-ICN` | Switch which route other commands target |
+
+### Active route settings
+
+| Command | Example | Description |
+|---------|---------|-------------|
+| `/config` | | Show active route settings |
+| `/setroute` | `/setroute SGN ICN` | Change origin/destination |
+| `/setdates` | `/setdates 2026-07-01` | Set one-way departure date |
+| `/setdates` | `/setdates 2026-07-01 2026-07-08` | Set round-trip dates |
+| `/setflightthreshold` | `/setflightthreshold 53` | Alert when flight ≤ $X/person |
+| `/sethotel` | `/sethotel Seoul 3` | Set hotel location and min star rating |
+| `/sethotelthreshold` | `/sethotelthreshold 80` | Alert when hotel ≤ $X/night |
+
+### Global settings (apply to all routes)
+
+| Command | Example | Description |
+|---------|---------|-------------|
+| `/settravelers` | `/settravelers 2` | Number of adults |
+| `/setcabin` | `/setcabin economy` | Cabin class |
+| `/setdrop` | `/setdrop 10` | Alert on price drop ≥ X% |
+| `/seturgency` | `/seturgency 14` | Daily alert when departure ≤ X days away |
+| `/setstreak` | `/setstreak 3` | Alert when price rises X days in a row |
+| `/setexchange` | `/setexchange 26300` | USD → VND exchange rate |
+| `/togglesummary` | | Toggle daily summary on/off |
+| `/run` | | Trigger a price check immediately |
+
+---
+
+## config.json Structure
+
+All settings are stored in `config.json`. The bot keeps this file up to date automatically — you rarely need to edit it by hand.
+
+```json
+{
+  "active_route": "SGN-HUI",
+  "routes": {
+    "SGN-HUI": {
+      "origin": "SGN",
+      "destination": "HUI",
+      "departure_date": "2026-07-01",
+      "return_date": null,
+      "flight_alert_threshold_usd": 53,
+      "hotel_location": "",
+      "hotel_alert_per_night_usd": 150,
+      "hotel_min_stars": 3
+    }
+  },
+  "travelers": 2,
+  "cabin": "economy",
+  "currency": "USD",
+  "usd_to_vnd": 26300,
+  "send_daily_summary": true,
+  "alert_on_price_drop_percent": 10,
+  "deadline_urgency_days": 14,
+  "price_rise_streak_days": 3
+}
+```
+
+`return_date: null` means one-way (hotel tracking disabled for that route).
 
 ---
 
@@ -78,10 +128,11 @@ cd price_tracker
 
 # Copy and fill in your secrets
 cp .env.example .env
-# Edit .env with your SERPAPI_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+# Edit .env: SERPAPI_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 pip install -r requirements.txt
-python tracker.py
+python tracker.py   # run price check once
+python bot.py       # start the Telegram command bot
 ```
 
 ---
@@ -89,24 +140,29 @@ python tracker.py
 ## Example Telegram Message
 
 ```
-✈️ Korea Trip Tracker — 2026-05-01
+✈️ Price Tracker — 2026-06-15
 
-FLIGHTS (SGN → ICN, 2 adults, round trip)
-VietJet Air | 1 stop(s) | 5h 30m
-Per person: $310 (~8,153,000 VND) — Over budget by $-40 (limit $350 / ~9,205,000 VND) ✅
+══ SGN → HUI ══
+📅 Jul 1, 2026 (one-way)
 
-HOTELS (Seoul, per night) ⭐4.2
-Novotel Ambassador Seoul
-Per night: $95 (~2,498,500 VND) — Under budget (limit $150 / ~3,945,000 VND) ✅
+✈️ FLIGHTS (2 adults)
+Dep   Arr   Airline        $/pp
+----------------------------------
+06:00 07:10 VJ VJ123       $48*
+07:30 08:40 VN VN456       $55
+Rate: 26,300 VND/USD  (* = under budget)
 
 📊 Price history (last 7 days)
-Date         | Flight  | Hotel/night
--------------|---------|------------
-2026-04-25   | $340    | $98
-2026-04-26   | $335    | $95
+Date         Flight   Hotel/night
+──────────────────────────────────
+2026-06-08      $52           N/A
+2026-06-09      $49           N/A
+...
+
+══ DAD → SGN ══
+📅 Jul 5, 2026 (one-way)
 ...
 
 🚨 ALERTS TRIGGERED
-• Hotel under budget: $95/night (<= $150 limit)
-• New all-time low hotel price: $95/night!
+• Flight under budget: $48/person (<= $53 limit)
 ```
